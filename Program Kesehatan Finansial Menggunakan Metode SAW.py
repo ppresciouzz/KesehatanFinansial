@@ -28,53 +28,15 @@ class DataKeuangan:
     def __init__(self, username, kelompok, pendapatan, tabungan, utang):
         self.username, self.kelompok = username, kelompok
         self.pendapatan, self.tabungan, self.utang = pendapatan, tabungan, utang
-        self.r_tabungan = self.r_utang = self.skor = 0      # diisi PerankinganSAW
+        self.rasio_tabungan, self.rasio_utang = tabungan / pendapatan, utang / pendapatan
+        tab_tinggi = tabungan * 100 >= AMBANG_TABUNGAN * pendapatan
+        utang_tinggi = utang * 100 >= AMBANG_UTANG * pendapatan
+        self.level = "ABCD"[(2 if utang_tinggi else 0) + (0 if tab_tinggi else 1)]
+        self.r_tabungan = self.r_utang = self.skor = 0
 
     @classmethod
     def dari_baris(cls, b):
         return cls(b["username"], b["kelompok"], int(b["pendapatan"]), int(b["tabungan"]), int(b["utang"]))
-
-    def ke_baris(self):
-        return {"username": self.username, "kelompok": self.kelompok, "pendapatan": self.pendapatan,
-                "tabungan": self.tabungan, "utang": self.utang, "rasio_tabungan": self.rasio_tabungan,
-                "rasio_utang": self.rasio_utang, "level": self.level}
-
-    @property
-    def rasio_tabungan(self):
-        return self.tabungan / self.pendapatan
-
-    @property
-    def rasio_utang(self):
-        return self.utang / self.pendapatan
-
-    @property
-    def level(self):
-        tab_tinggi = self.tabungan * 100 >= AMBANG_TABUNGAN * self.pendapatan
-        utang_tinggi = self.utang * 100 >= AMBANG_UTANG * self.pendapatan
-        return "ABCD"[(2 if utang_tinggi else 0) + (0 if tab_tinggi else 1)]
-
-    def rekomendasi(self):
-        target = -(-AMBANG_TABUNGAN * self.pendapatan // 100)       # pembulatan ke atas
-        tambah = max(0, target - self.tabungan)
-        utang_maks = (AMBANG_UTANG * self.pendapatan - 1) // 100    # harus di bawah ambang
-        kurang = max(0, self.utang - utang_maks)
-        saran = {
-            "A": ["Pertahankan level A:",
-                  f"  - Pertahankan tabungan minimal Rp {target} per tahun dan jaga utang maksimal Rp {utang_maks}.",
-                  "  - Siapkan dana darurat agar tidak perlu berutang saat ada kebutuhan mendadak."],
-            "B": ["Untuk naik ke level A, naikkan tabungan:",
-                  f"  - Tambah tabungan minimal Rp {tambah} per tahun (target Rp {target}, yaitu {AMBANG_TABUNGAN}% pendapatan).",
-                  "  - Pertahankan utang tetap di bawah batas."],
-            "C": ["Untuk naik ke level A, turunkan utang:",
-                  f"  - Kurangi pembayaran utang minimal Rp {kurang} per tahun (batas utang {AMBANG_UTANG}% pendapatan).",
-                  "  - Prioritaskan melunasi utang berbunga tinggi lebih dahulu.",
-                  "  - Pertahankan tabungan agar tetap di atas ambang."],
-            "D": ["Untuk naik dari level D, lakukan dua hal:",
-                  f"  1. Turunkan utang minimal Rp {kurang} per tahun (naik ke level B).",
-                  f"  2. Tambah tabungan minimal Rp {tambah} per tahun (naik ke level A).",
-                  "  Mulailah dari utang, karena beban cicilan membatasi kemampuan menabung."],
-        }[self.level]
-        return saran + [f"\nTips untuk {self.kelompok}: {TIPS_KELOMPOK[self.kelompok]}"]
 
 
 class Penyimpanan:
@@ -84,7 +46,6 @@ class Penyimpanan:
             if not os.path.exists(nama) or os.path.getsize(nama) == 0:
                 with open(nama, "w", newline="") as f:
                     csv.DictWriter(f, fieldnames=kolom).writeheader()
-        # salin data contoh (reddit) yang belum ada, tanpa menimpa data asli
         if os.path.exists(FILE_CONTOH):
             ada = {b["username"] for b in self._baca(FILE_DATA)}
             for b in self._baca(FILE_CONTOH):
@@ -107,69 +68,40 @@ class Penyimpanan:
     def tambah_akun(self, username, password):
         self._tulis(FILE_AKUN, KOLOM_AKUN, {"username": username, "password": password})
 
-    def cek_login(self, username, password):
-        for a in self._baca(FILE_AKUN):
-            if a["username"].lower() == username.lower() and a["password"] == password:
-                return a["username"]
-        return None
-
-    def simpan_data(self, data):
-        self._tulis(FILE_DATA, KOLOM_DATA, data.ke_baris())
+    def simpan_data(self, d):
+        self._tulis(FILE_DATA, KOLOM_DATA, {
+            "username": d.username, "kelompok": d.kelompok, "pendapatan": d.pendapatan,
+            "tabungan": d.tabungan, "utang": d.utang, "rasio_tabungan": d.rasio_tabungan,
+            "rasio_utang": d.rasio_utang, "level": d.level})
 
     def data_terbaru(self, kelompok=None):
-        """Data terbaru tiap pengguna (baris terakhir menimpa yang lama)."""
         hasil = {b["username"]: DataKeuangan.dari_baris(b) for b in self._baca(FILE_DATA)}
         return {u: d for u, d in hasil.items() if kelompok is None or d.kelompok == kelompok}
 
 
 class PerankinganSAW:
 
-    def __init__(self, daftar):
-        self.daftar = daftar
-
-    def hitung(self):
-        maks_tab = max(d.rasio_tabungan for d in self.daftar)
-        min_utang = min((d.rasio_utang for d in self.daftar if d.rasio_utang > 0), default=0)
-        for d in self.daftar:
+    @staticmethod
+    def hitung(daftar):
+        maks_tab = max(d.rasio_tabungan for d in daftar)
+        min_utang = min((d.rasio_utang for d in daftar if d.rasio_utang > 0), default=0)
+        for d in daftar:
             d.r_tabungan = d.rasio_tabungan / maks_tab if maks_tab > 0 else 0
             d.r_utang = 1 if d.rasio_utang == 0 else min_utang / d.rasio_utang
             d.skor = BOBOT_TABUNGAN * d.r_tabungan + BOBOT_UTANG * d.r_utang
-        self.daftar.sort(key=lambda d: (-d.skor, d.level))      # skor tinggi dulu, seri -> level A..D
-
-    def tampilkan(self, user, judul):
-        self.hitung()
-        print(f"\n--- {judul} ---")
-        print("No   Username       Kelompok   Level  Tab%     Utang%   R-Tab   R-Utang  Skor")
-        print(GARIS)
-        posisi = 0
-        for no, d in enumerate(self.daftar, 1):
-            tab, utg = f"{round(d.rasio_tabungan * 100, 2)}%", f"{round(d.rasio_utang * 100, 2)}%"
-            tanda = "  <-- Anda" if d.username == user else ""
-            if tanda:
-                posisi = no
-            print(f"{no:<5}{d.username[:13]:<15}{d.kelompok:<11}{d.level:<7}{tab:<9}{utg:<9}"
-                  f"{round(d.r_tabungan, 4):<8}{round(d.r_utang, 4):<9}{round(d.skor, 4)}{tanda}")
-        print(GARIS)
-        print(f"Peringkat Anda: {posisi} dari {len(self.daftar)} pengguna." if posisi
-              else "Anda belum termasuk dalam ranking ini.")
-        print(f"Metode SAW: Skor = {BOBOT_TABUNGAN} x R-Tab + {BOBOT_UTANG} x R-Utang")
-        print("R-Tab = tabungan / tabungan tertinggi (benefit).")
-        print("R-Utang = utang terendah (selain 0) / utang (cost); utang 0 bernilai 1.")
+        daftar.sort(key=lambda d: (-d.skor, d.level))
 
 
 class Aplikasi:
-
-    def __init__(self):
-        self.db = Penyimpanan()
-        self.user = None
 
     @staticmethod
     def baca_angka(pesan, positif):
         while True:
             teks = input(pesan).strip()
-            if teks.isascii() and teks.isdigit() and not (positif and int(teks) == 0):
+            angka = teks.isascii() and teks.isdigit()
+            if angka and not (positif and int(teks) == 0):
                 return int(teks)
-            print("  Nilai harus lebih dari 0." if teks.isascii() and teks.isdigit()
+            print("  Nilai harus lebih dari 0." if angka
                   else "  Masukkan angka bulat saja, tanpa titik, koma, minus, atau huruf.")
 
     @staticmethod
@@ -201,7 +133,12 @@ class Aplikasi:
     def proses_login(self):
         while True:
             print("\n=== LOGIN ===")
-            self.user = self.db.cek_login(input("Username: ").strip(), input("Password: ").strip())
+            username, password = input("Username: ").strip(), input("Password: ").strip()
+            self.user = None
+            for a in self.db._baca(FILE_AKUN):
+                if a["username"].lower() == username.lower() and a["password"] == password:
+                    self.user = a["username"]
+                    break
             if self.user:
                 print(f"\nLogin berhasil. Selamat datang, {self.user}!")
                 return True
@@ -216,50 +153,66 @@ class Aplikasi:
                     break
                 print("Pilihan tidak dikenal.")
 
-    def menu_hitung(self):
-        print("\n=== MENU 1: RASIO TABUNGAN DAN RASIO PEMBAYARAN UTANG ===")
-        kelompok = self.pilih_kelompok()
-        print("\nIsi data keuangan PER TAHUN (angka bulat, dalam rupiah).")
-        label = "Uang Saku per tahun    : " if kelompok == "Mahasiswa" else "Pendapatan kotor per tahun    : "
-        pendapatan = self.baca_angka(label, True)
-        tabungan = self.baca_angka("Pendapatan yang ditabung       : ", False)
-        utang = self.baca_angka("Total pembayaran utang per tahun: ", False)
-        data = DataKeuangan(self.user, kelompok, pendapatan, tabungan, utang)
-        self.db.simpan_data(data)
-        print("\n--- HASIL ---")
-        print(f"Kelompok       : {kelompok}")
-        print(f"Rasio tabungan : {round(data.rasio_tabungan * 100, 2)}%  (ambang {AMBANG_TABUNGAN}%)")
-        print(f"Rasio utang    : {round(data.rasio_utang * 100, 2)}%  (ambang {AMBANG_UTANG}%)")
-        print(f"Level          : {data.level} - {KETERANGAN_LEVEL[data.level]}")
-        print("Hasil sudah disimpan.")
-
-    def tampil_ranking(self, kelompok=None):
-        daftar = list(self.db.data_terbaru(kelompok).values())
-        if not daftar:
-            return print("Belum ada data penilaian." if kelompok is None else f"Belum ada data di kelompok {kelompok}.")
-        judul = "RANKING GLOBAL (SAW)" if kelompok is None else f"RANKING KELOMPOK {kelompok} (SAW)"
-        PerankinganSAW(daftar).tampilkan(self.user, judul)
-
     def menu_perangkingan(self):
         while True:
             pilihan = input("\n=== MENU 2: PERANGKINGAN (METODE SAW) ===\n1. Ranking global (semua pengguna)\n"
                             "2. Ranking per kelompok\n3. Kembali\nPilih: ").strip()
-            if pilihan == "1":
-                self.tampil_ranking()
-            elif pilihan == "2":
-                self.tampil_ranking(self.pilih_kelompok())
-            elif pilihan == "3":
+            if pilihan == "3":
                 return
-            else:
+            if pilihan not in ("1", "2"):
                 print("Pilihan tidak dikenal.")
+                continue
+            kelompok = None if pilihan == "1" else self.pilih_kelompok()
+            daftar = list(self.db.data_terbaru(kelompok).values())
+            if not daftar:
+                print("Belum ada data penilaian." if kelompok is None else f"Belum ada data di kelompok {kelompok}.")
+                continue
+            PerankinganSAW.hitung(daftar)
+            print(f"\n--- {'RANKING GLOBAL (SAW)' if kelompok is None else f'RANKING KELOMPOK {kelompok} (SAW)'} ---")
+            print("No   Username       Kelompok   Level  Tab%     Utang%   R-Tab   R-Utang  Skor")
+            print(GARIS)
+            posisi = 0
+            for no, d in enumerate(daftar, 1):
+                tab, utg = f"{round(d.rasio_tabungan * 100, 2)}%", f"{round(d.rasio_utang * 100, 2)}%"
+                tanda = "  <-- Anda" if d.username == self.user else ""
+                if tanda:
+                    posisi = no
+                print(f"{no:<5}{d.username[:13]:<15}{d.kelompok:<11}{d.level:<7}{tab:<9}{utg:<9}"
+                      f"{round(d.r_tabungan, 4):<8}{round(d.r_utang, 4):<9}{round(d.skor, 4)}{tanda}")
+            print(GARIS)
+            print(f"Peringkat Anda: {posisi} dari {len(daftar)} pengguna." if posisi
+                  else "Anda belum termasuk dalam ranking ini.")
+            print(f"Metode SAW: Skor = {BOBOT_TABUNGAN} x R-Tab + {BOBOT_UTANG} x R-Utang\n"
+                  "R-Tab = tabungan / tabungan tertinggi (benefit).\n"
+                  "R-Utang = utang terendah (selain 0) / utang (cost); utang 0 bernilai 1.")
 
     def menu_rekomendasi(self):
         print("\n=== MENU 3: REKOMENDASI TINDAKAN ===")
         saya = self.db.data_terbaru().get(self.user)
         if saya is None:
             return print("Anda belum punya data. Isi Menu 1 terlebih dahulu.")
+        target = -(-AMBANG_TABUNGAN * saya.pendapatan // 100)
+        tambah = max(0, target - saya.tabungan)
+        utang_maks = (AMBANG_UTANG * saya.pendapatan - 1) // 100
+        kurang = max(0, saya.utang - utang_maks)
+        saran = {
+            "A": ["Pertahankan level A:",
+                  f"  - Pertahankan tabungan minimal Rp {target} per tahun dan jaga utang maksimal Rp {utang_maks}.",
+                  "  - Siapkan dana darurat agar tidak perlu berutang saat ada kebutuhan mendadak."],
+            "B": ["Untuk naik ke level A, naikkan tabungan:",
+                  f"  - Tambah tabungan minimal Rp {tambah} per tahun (target Rp {target}, yaitu {AMBANG_TABUNGAN}% pendapatan).",
+                  "  - Pertahankan utang tetap di bawah batas."],
+            "C": ["Untuk naik ke level A, turunkan utang:",
+                  f"  - Kurangi pembayaran utang minimal Rp {kurang} per tahun (batas utang {AMBANG_UTANG}% pendapatan).",
+                  "  - Prioritaskan melunasi utang berbunga tinggi lebih dahulu.",
+                  "  - Pertahankan tabungan agar tetap di atas ambang."],
+            "D": ["Untuk naik dari level D, lakukan dua hal:",
+                  f"  1. Turunkan utang minimal Rp {kurang} per tahun (naik ke level B).",
+                  f"  2. Tambah tabungan minimal Rp {tambah} per tahun (naik ke level A).",
+                  "  Mulailah dari utang, karena beban cicilan membatasi kemampuan menabung."],
+        }[saya.level]
         print(f"Level Anda saat ini: {saya.level} - {KETERANGAN_LEVEL[saya.level]}\n")
-        print("\n".join(saya.rekomendasi()))
+        print("\n".join(saran + [f"\nTips untuk {saya.kelompok}: {TIPS_KELOMPOK[saya.kelompok]}"]))
 
     def menu_utama(self):
         while True:
@@ -267,7 +220,21 @@ class Aplikasi:
             pilihan = input("1. Hitung rasio tabungan dan rasio pembayaran utang\n2. Perangkingan (global dan kelompok)\n"
                             "3. Rekomendasi tindakan selanjutnya\n4. Logout\nPilih: ").strip()
             if pilihan == "1":
-                self.menu_hitung()
+                print("\n=== MENU 1: RASIO TABUNGAN DAN RASIO PEMBAYARAN UTANG ===")
+                kelompok = self.pilih_kelompok()
+                print("\nIsi data keuangan PER TAHUN (angka bulat, dalam rupiah).")
+                label = "Uang Saku per tahun    : " if kelompok == "Mahasiswa" else "Pendapatan kotor per tahun    : "
+                pendapatan = self.baca_angka(label, True)
+                tabungan = self.baca_angka("Pendapatan yang ditabung       : ", False)
+                utang = self.baca_angka("Total pembayaran utang per tahun: ", False)
+                data = DataKeuangan(self.user, kelompok, pendapatan, tabungan, utang)
+                self.db.simpan_data(data)
+                print("\n--- HASIL ---")
+                print(f"Kelompok       : {kelompok}")
+                print(f"Rasio tabungan : {round(data.rasio_tabungan * 100, 2)}%  (ambang {AMBANG_TABUNGAN}%)")
+                print(f"Rasio utang    : {round(data.rasio_utang * 100, 2)}%  (ambang {AMBANG_UTANG}%)")
+                print(f"Level          : {data.level} - {KETERANGAN_LEVEL[data.level]}")
+                print("Hasil sudah disimpan.")
             elif pilihan == "2":
                 self.menu_perangkingan()
             elif pilihan == "3":
@@ -283,6 +250,7 @@ class Aplikasi:
                 print("Ketik 1-4 aja ya.")
 
     def jalankan(self):
+        self.db, self.user = Penyimpanan(), None
         while True:
             print("\n==== PENILAIAN KESEJAHTERAAN FINANSIAL ====")
             print("\n Haloo! Selamat datang di program penilaian kesejahteraan finansial kami dari kelompok 8A")
