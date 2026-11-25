@@ -23,7 +23,7 @@ Dibuat oleh Kelompok 8A:
 Kebutuhan: Python 3.8 atau lebih baru. Tidak ada library tambahan.
 
 ```
-python program_kesejahteraan_finansial_saw.py
+Program Kesehatan Finansial Menggunakan Metode SAW.py
 ```
 
 Saat pertama dijalankan, program membuat sendiri `akun.csv` dan `data_penilaian.csv`
@@ -48,7 +48,7 @@ di folder tempat program dijalankan.
 ## Struktur repositori
 
 ```
-program_kesejahteraan_finansial_saw.py   program utama
+Program Kesehatan Finansial Menggunakan Metode SAW.py   program utama
 docs/                                    tracing satu baris data dan 98 test case (Word)
 tools/konversi_reddit.py                 mengubah dataset reddit_finance.csv ke format program
 .gitignore                               mengecualikan data pengguna (akun dan hasil penilaian)
